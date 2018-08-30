@@ -17,6 +17,7 @@ String appKey = SECRET_APP_KEY;
 bool           connected;
 unsigned long  lastConnectionTry;
 unsigned long  nextCommunication;
+unsigned long  nextConfirmation;
 int err_count;
 
 void setColor(int r,int g,int b) {
@@ -28,6 +29,7 @@ void setColor(int r,int g,int b) {
 void setup() {
   // Debug Serial port
   Serial.begin(115200);  
+
   
   // GPS serial port
   Serial1.begin(9600);
@@ -38,6 +40,7 @@ void setup() {
   connected=false;
   err_count=0;
   lastConnectionTry=0;
+  nextConfirmation=0;
 
   // Init Leds GPIOs
   pinMode(LBLUE,OUTPUT);
@@ -45,6 +48,7 @@ void setup() {
   pinMode(LRED,OUTPUT);
   pinMode(BOARDLED,OUTPUT);
   setColor(HIGH,HIGH,LOW);
+  Serial.println("Go on!");
 }
 
 void processGps() {
@@ -60,12 +64,11 @@ void delayWithGps(unsigned long durationMs){
   unsigned long start=millis();
   while ( millis() < (start+durationMs) ) {
     processGps();
-    delay(1);
   }
 }
 
 void loop() {
-  char msg[12] = {0,1,2,3,4,5,6,7,8,9,10,11};
+  char msg[10] = {0,1,2,3,4,5,6,7,8,9};
 
   if ( !connected && ( lastConnectionTry == 0 || lastConnectionTry < millis() + 60000L ) ) {
     lastConnectionTry = millis();
@@ -77,6 +80,7 @@ void loop() {
       delayWithGps(100);
       err_count=0;
       nextCommunication=millis()+10000; // + 10s
+      nextConfirmation=millis()+10000;
     } else {
       setColor(LOW,HIGH,HIGH);
     }
@@ -93,14 +97,11 @@ void loop() {
     }
   } else {
     // GPS Position OK
-    if ( connected && nextCommunication <= millis() ) {
-      long lat = gps.location.rawLat().deg * 1000000;
-           lat += gps.location.rawLat().billionths / 1000;
-           lat += 100000000;
-      long lng = gps.location.rawLng().deg * 1000000;
-           lng += gps.location.rawLng().billionths / 1000;
-           lng += 100000000;
-      int  altitude = -gps.altitude.value()/10;
+    if ( connected && nextCommunication <= millis() ) {      
+      long lat = (long)( ((double)gps.location.lat() + 90.0) * 93206.75 );
+      long lng = (long)( ((double)gps.location.lng() + 180.0) * 46603.375 );
+      int altitude = gps.altitude.value()/100;
+      if ( altitude < 0 || altitude > 1000 ) altitude = 500; // TinyGPS with L80 altitude is strange.. bad is better than crazy
       int  hdop= gps.hdop.value();
       if ( hdop > 900 ) {
         Serial.print("Position invalid -");
@@ -109,18 +110,20 @@ void loop() {
       } else {
         Serial.print("lat: ");Serial.print(lat);
         Serial.print(", lng: ");Serial.print(lng);
+        Serial.print(", alt_src: ");Serial.print(gps.altitude.value());
         Serial.print(", alt: ");Serial.print(altitude);
         Serial.print(", hdop:");Serial.print(hdop);
         Serial.print(", sat:");Serial.println(gps.satellites.value());
         msg[0]=0;
         msg[1]=((altitude)>>8)&0xFF; msg[2]=((altitude)&0xFF);
         msg[3]=hdop/10;
-        msg[4]=(lat>>24) & 0xFF; msg[5]=(lat>>16) & 0xFF; msg[6]=(lat>>8) & 0xFF;msg[7]=(lat) & 0xFF;
-        msg[8]=(lng>>24) & 0xFF; msg[9]=(lng>>16) & 0xFF; msg[10]=(lng>>8) & 0xFF;msg[11]=(lng) & 0xFF;     
+        msg[4]=(lat>>16) & 0xFF; msg[5]=(lat>>8) & 0xFF;msg[6]=(lat) & 0xFF;
+        msg[7]=(lng>>16) & 0xFF; msg[8]=(lng>>8) & 0xFF;msg[9]=(lng) & 0xFF;     
       } 
+      setColor(HIGH,HIGH,HIGH);
       modem.beginPacket();
-      modem.write(msg,12);
-      int err = modem.endPacket(true);
+      modem.write(msg,10);
+      int err = modem.endPacket((nextConfirmation < millis()));
       if ( err <= 0 ) {
         setColor(LOW,HIGH,HIGH);
         err_count++;
@@ -128,11 +131,16 @@ void loop() {
           connected = false;
           setColor(HIGH,HIGH,LOW);
         }
-        nextCommunication=millis()+120000L; // wait for 2 minutes.
+        nextCommunication=millis()+20000L; // wait for 20 seconds
+        nextConfirmation=millis()+180000L; // wait for 8 minutes - do not want to spam in SF12
       } else {
+        delay(50);
         setColor(HIGH,LOW,HIGH);
         err_count = 0;
         nextCommunication=millis()+10000L; // wait for 10 seconds.
+        if ( nextConfirmation < millis() ) { // confirmation every 30 seconds
+          nextConfirmation = millis()+30000L;
+        }
       }
     }
   }
