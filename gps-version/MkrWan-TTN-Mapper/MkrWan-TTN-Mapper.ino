@@ -20,10 +20,35 @@ unsigned long  nextCommunication;
 unsigned long  nextConfirmation;
 int err_count;
 
-void setColor(int r,int g,int b) {
-  digitalWrite(LBLUE,b);
-  digitalWrite(LGREEN,g);
-  digitalWrite(LRED,r);
+#define COLOR_BLACK  0x000000
+#define COLOR_BLUE   0x0000FF
+#define COLOR_RED    0xFF0000
+#define COLOR_GREEN  0x00FF00
+
+
+uint32_t previousLedValue;
+void setColor(uint32_t color, boolean save) {
+  int r = (color >> 16) & 0xff;
+  int g = (color >> 8) & 0xff;
+  int b = (color ) & 0xff;
+
+  if ( r == 0xff ) digitalWrite(LRED,LOW);
+  else if ( r == 0x00 ) digitalWrite(LRED,HIGH);
+  else analogWrite(LRED,256-r);
+
+  if ( g == 0xff ) digitalWrite(LGREEN,LOW);
+  else if ( g == 0x00 ) digitalWrite(LGREEN,HIGH);
+  else analogWrite(LGREEN,256-g);
+
+  if ( b == 0xff ) digitalWrite(LBLUE,LOW);
+  else if ( b == 0x00 ) digitalWrite(LBLUE,HIGH);
+  else analogWrite(LBLUE,256-b);
+
+  if ( save ) previousLedValue=color;
+}
+
+void restoreColor() {
+  setColor(previousLedValue,false);
 }
 
 void setup() {
@@ -47,7 +72,7 @@ void setup() {
   pinMode(LGREEN,OUTPUT);
   pinMode(LRED,OUTPUT);
   pinMode(BOARDLED,OUTPUT);
-  setColor(HIGH,HIGH,LOW);
+  setColor(COLOR_BLUE,true);
   Serial.println("Go on!");
 }
 
@@ -81,19 +106,20 @@ void loop() {
       err_count=0;
       nextCommunication=millis()+10000; // + 10s
       nextConfirmation=millis()+10000;
+      setColor(COLOR_GREEN,true);
     } else {
-      setColor(LOW,HIGH,HIGH);
+      setColor(COLOR_RED,true);
     }
   }
   if ( ! gps.location.isValid() || !gps.altitude.isValid() ) {
     // Wait for GPS to be positionned
-    setColor(HIGH,HIGH,HIGH);
+    setColor(COLOR_BLACK,false);
     delayWithGps(1000);
     for ( int i = 0 ; i < gps.satellites.value()+1 ; i++ ) {
-      setColor(HIGH,HIGH,HIGH);
+      setColor(COLOR_BLACK,false);
       delayWithGps(150);
-      setColor(HIGH,(connected)?LOW:HIGH,(connected)?HIGH:LOW);
-      delayWithGps(150);  
+      restoreColor();
+      delayWithGps(100);  
     }
   } else {
     // GPS Position OK
@@ -110,7 +136,6 @@ void loop() {
       } else {
         Serial.print("lat: ");Serial.print(lat);
         Serial.print(", lng: ");Serial.print(lng);
-        Serial.print(", alt_src: ");Serial.print(gps.altitude.value());
         Serial.print(", alt: ");Serial.print(altitude);
         Serial.print(", hdop:");Serial.print(hdop);
         Serial.print(", sat:");Serial.println(gps.satellites.value());
@@ -120,27 +145,32 @@ void loop() {
         msg[4]=(lat>>16) & 0xFF; msg[5]=(lat>>8) & 0xFF;msg[6]=(lat) & 0xFF;
         msg[7]=(lng>>16) & 0xFF; msg[8]=(lng>>8) & 0xFF;msg[9]=(lng) & 0xFF;     
       } 
-      setColor(HIGH,HIGH,HIGH);
+      setColor(COLOR_BLACK,false);
       modem.beginPacket();
       modem.write(msg,10);
-      int err = modem.endPacket((nextConfirmation < millis()));
+      boolean toBeConfirmed = (nextConfirmation < millis());
+      int err = modem.endPacket(toBeConfirmed);
       if ( err <= 0 ) {
-        setColor(LOW,HIGH,HIGH);
+        // Should only be here when in confirmation mode
+        // with an error
+        setColor(COLOR_RED,true);
         err_count++;
         if ( err_count > 50 ) {
           connected = false;
-          setColor(HIGH,HIGH,LOW);
+          setColor(COLOR_BLUE,true);
         }
         nextCommunication=millis()+20000L; // wait for 20 seconds
-        nextConfirmation=millis()+180000L; // wait for 8 minutes - do not want to spam in SF12
+        nextConfirmation=millis()+300000L; // wait for 5 minutes - do not want to spam in SF12
       } else {
-        delay(50);
-        setColor(HIGH,LOW,HIGH);
-        err_count = 0;
-        nextCommunication=millis()+10000L; // wait for 10 seconds.
-        if ( nextConfirmation < millis() ) { // confirmation every 30 seconds
-          nextConfirmation = millis()+30000L;
+        delayWithGps(200); 
+        if (toBeConfirmed) {
+          err_count = 0;
+          setColor(COLOR_GREEN,true);
+          nextConfirmation = millis()+30000L; // Next confirmation in 30 seconds
+        } else {
+          restoreColor();
         }
+        nextCommunication=millis()+10000L; // wait for 10 seconds.
       }
     }
   }
